@@ -26,12 +26,29 @@ DEFAULT_IS_ENABLED = True
 
 #Set whether the plugin is on or off
 ts_settings = sublime.load_settings('trailing_spaces.sublime-settings')
+
 trailing_spaces_enabled = bool(ts_settings.get('trailing_spaces_enabled',
                                                DEFAULT_IS_ENABLED))
 
-# Determine if the view is a find results view
-def is_find_results(view):
-    return view.settings().get('syntax') and "Find Results" in view.settings().get('syntax')
+trailing_spaces_ignore = ts_settings.get('trailing_spaces_ignore', [])
+
+
+
+def ignore_view(view):
+    if not view.settings().get('syntax'):
+        return False
+
+    view_syntax = view.settings().get('syntax');
+
+    # useful default ignores (find results view | HexViewer)
+    if "Find Results" in view_syntax or "HexViewer" in view_syntax:
+        return True
+
+    for syntax_ignore in trailing_spaces_ignore:
+        if syntax_ignore in view_syntax:
+            return True
+
+    return False
 
 # Return an array of regions matching trailing spaces.
 def find_trailing_spaces(view):
@@ -39,18 +56,34 @@ def find_trailing_spaces(view):
                                                DEFAULT_IS_ENABLED))
     return view.find_all('[ \t]+$' if include_empty_lines else '(?<=\S)[\t ]+$')
 
+def update_region(view):
+    global trailingWhitespaces
+    linesWithSelection = set()
+    for s in view.sel():
+        if s.a != s.b:
+            continue
+        linesWithSelection.add(view.full_line(sublime.Region(s.a)))
+    regionsToIgnore = set()
+    for r in trailingWhitespaces:
+        for l in linesWithSelection:
+            if l.intersects(r):
+                regionsToIgnore.add(r)
+
+    regions = list(trailingWhitespaces - regionsToIgnore)
+    color_scope_name = ts_settings.get('trailing_spaces_highlight_color',
+                                       DEFAULT_COLOR_SCOPE_NAME)
+    view.add_regions('TrailingSpacesHighlightListener',
+                     regions, color_scope_name,
+                     sublime.DRAW_EMPTY)
 
 # Highlight trailing spaces
 def highlight_trailing_spaces(view):
+    global trailingWhitespaces
     max_size = ts_settings.get('trailing_spaces_file_max_size',
                                DEFAULT_MAX_FILE_SIZE)
-    color_scope_name = ts_settings.get('trailing_spaces_highlight_color',
-                                       DEFAULT_COLOR_SCOPE_NAME)
-    if view.size() <= max_size and not is_find_results(view):
-        regions = find_trailing_spaces(view)
-        view.add_regions('TrailingSpacesHighlightListener',
-                         regions, color_scope_name,
-                         sublime.DRAW_EMPTY)
+    if view.size() <= max_size and not ignore_view(view):
+        trailingWhitespaces = set(find_trailing_spaces(view))
+        update_region(view)
 
 
 # Clear all trailing spaces
@@ -75,6 +108,10 @@ class ToggleTrailingSpacesCommand(sublime_plugin.WindowCommand):
 
 # Highlight matching regions.
 class TrailingSpacesHighlightListener(sublime_plugin.EventListener):
+    def on_selection_modified(self, view):
+        if trailing_spaces_enabled:
+            update_region(view)
+
     def on_modified(self, view):
         if trailing_spaces_enabled:
             highlight_trailing_spaces(view)
